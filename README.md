@@ -9,7 +9,7 @@ The README.md file inside the folder contains more information on the scripts in
 ```bash
 mkdir -p ~/utils_ws/src 
 cd ~/utils_ws/src
-git clone git@github.com:AutonomousFieldRoboticsLab/utils.git
+git clone https://github.com/AutonomousFieldRoboticsLab/utils.git
 cd ..
 catkin_make
 ```
