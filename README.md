@@ -52,7 +52,7 @@ sudo apt-get install -y \
 ```bash
 mkdir -p ~/utils_ros2_ws/src 
 cd ~/utils_ros2_ws/src
-git clone https://github.com/Alexander-guo/utils_ros2.git
+git clone https://github.com/AutonomousFieldRoboticsLab/utils_ros2.git
 cd ..
 source /opt/ros/jazzy/setup.bash
 colcon build --packages-select utils_ros2 --symlink-install
