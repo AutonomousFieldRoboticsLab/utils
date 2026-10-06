@@ -1,54 +1,60 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""Combines a left and a right GoPro bag (written by gopro_ros) into one stereo bag.
 
-import cv2
+Works with ROS 1 bags and ROS 2 bags (MCAP or SQLite3); the ROS version is taken from $ROS_VERSION.
+"""
+
 import argparse
 import os
-from tqdm import tqdm
-import rosbag
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ros_compat import ROS2_STORAGE_IDS, ROS_VERSION, BagReader, BagWriter  # noqa: E402
+
+# gopro_ros topic -> topic name in the stereo bag, below /gopro/left or /gopro/right
+TOPICS = {
+    "/gopro/image_raw": "image_raw",
+    "/gopro/image_raw/compressed": "image_raw/compressed",
+    "/gopro/imu": "imu",
+    "/gopro/magnetic_field": "magnetic_field",
+}
+
+
+def copy_bag(reader: BagReader, writer: BagWriter, side: str):
+    types = reader.topic_types()
+    for topic, msg, t in reader:
+        writer.write(f"/gopro/{side}/{TOPICS[topic]}", msg, t, types[topic])
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="combine_gopro_bags",
-        description="Come left and right gopro bags into stereo",
+        description="Combine left and right gopro bags into stereo",
         add_help=True,
     )
     parser.add_argument("--left_bag", "-l", type=str, help="path to left gopro bag")
     parser.add_argument("--right_bag", "-r", type=str, help="path to right gopro bag")
     parser.add_argument("--output_bag", "-o", type=str, help="path to output bag")
+    parser.add_argument(
+        "--storage_id",
+        "-s",
+        choices=list(ROS2_STORAGE_IDS),
+        default=".mcap",
+        help="ROS 2 only: storage of the output bag (default: .mcap)",
+    )
 
     args = parser.parse_args()
-    left_bag = args.left_bag
-    right_bag = args.right_bag
-    output_bag = args.output_bag
-
-    if left_bag is None or right_bag is None or output_bag is None:
+    if args.left_bag is None or args.right_bag is None or args.output_bag is None:
         print("Please specify all bag paths")
         exit(1)
 
-    left = rosbag.Bag(left_bag, "r")
-    right = rosbag.Bag(right_bag, "r")
-    out = rosbag.Bag(output_bag, "w")
+    storage = f" ({args.storage_id})" if ROS_VERSION == 2 else ""
+    print(f"Writing ROS {ROS_VERSION} bag {args.output_bag}{storage}")
 
-    for topic, msg, t in left.read_messages():
-        if topic == "/gopro/image_raw":
-            out.write("/gopro/left/image_raw", msg, t)
-        elif topic == "/gopro/image_raw/compressed":
-            out.write("/gopro/left/image_raw/compressed", msg, t)
-        elif topic == "/gopro/imu":
-            out.write("/gopro/left/imu", msg, t)
-        elif topic == "/gopro/magnetic_field":
-            out.write("/gopro/left/magnetic_field", msg, t)
-
-    for topic, msg, t in right.read_messages():
-        if topic == "/gopro/image_raw":
-            out.write("/gopro/right/image_raw", msg, t)
-        elif topic == "/gopro/image_raw/compressed":
-            out.write("/gopro/right/image_raw/compressed", msg, t)
-        elif topic == "/gopro/imu":
-            out.write("/gopro/right/imu", msg, t)
-        elif topic == "/gopro/magnetic_field":
-            out.write("/gopro/right/magnetic_field", msg, t)
-
-    left.close()
-    right.close()
-    out.close()
+    writer = BagWriter(args.output_bag, args.storage_id)
+    for side, path in (("left", args.left_bag), ("right", args.right_bag)):
+        # On ROS 2 the messages are copied without deserializing them
+        reader = BagReader(path, topics=TOPICS, deserialize=False)
+        copy_bag(reader, writer, side)
+        reader.close()
+    writer.close()

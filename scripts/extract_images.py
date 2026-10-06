@@ -1,91 +1,78 @@
-#! /usr/bin/env python
+#!/usr/bin/env python3
+"""Writes the images of a bag at a fixed rate, mono or stereo, as grayscale PNGs.
 
-from __future__ import print_function
+Works with ROS 1 bags and ROS 2 bags (MCAP or SQLite3); the ROS version is taken from $ROS_VERSION.
+"""
+
 import os
+import sys
+
 import cv2
 from cv_bridge import CvBridge
-
-import rospy
-import rosbag
-import message_filters
 from tqdm import tqdm
 
-from sensor_msgs.msg import Image, CompressedImage
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ros_compat import (  # noqa: E402
+    BagReader,
+    ExactTimeSynchronizer,
+    Node,
+    is_compressed_image,
+    stamp_to_nsec,
+)
 
 clahe = cv2.createCLAHE(clipLimit=10.0, tileGridSize=(6, 6))
-
-start_time = 1694198420.37
-end_time = 1694200780.37
 
 
 class ImageExtractor:
     def __init__(
         self,
+        node: Node,
         image_dir: str,
         bag_file: str,
         stereo: bool,
         compressed: bool,
         left_topic: str,
         cache_size: int = 1000,
-        slop: float = 0.02,
         scale: float = 1.0,
         right_topic: str = None,
+        start_time: float = 0.0,
+        end_time: float = 0.0,
+        display: bool = False,
     ) -> None:
+        self.node = node
         self.stereo = stereo
-        self.bag = rosbag.Bag(bag_file, "r")
+        self.bag = bag_file
         self.img_dir = image_dir
         self.left_image_dir = os.path.join(self.img_dir, "left")
         self.right_image_dir = os.path.join(self.img_dir, "right")
         self.scale = scale
+        self.start_time = start_time
+        self.end_time = end_time
+        self.display = display
 
-        if not os.path.exists(image_dir):
-            os.makedirs(image_dir)
+        os.makedirs(image_dir, exist_ok=True)
 
+        suffix = "/compressed" if compressed else ""
         if self.stereo:
-            if compressed:
-                self.message_types = [CompressedImage] * 2
-                self.img_topics = [
-                    left_topic + "/compressed",
-                    right_topic + "/compressed",
-                ]
-            else:
-                self.img_topics = [left_topic, right_topic]
-                self.message_types = [Image] * 2
-            os.mkdir(self.left_image_dir)
-            os.mkdir(self.right_image_dir)
+            self.img_topics = [left_topic + suffix, right_topic + suffix]
+            os.makedirs(self.left_image_dir, exist_ok=True)
+            os.makedirs(self.right_image_dir, exist_ok=True)
+            self.synchronizer = ExactTimeSynchronizer(2, cache_size, self.write_stereo_images)
         else:
-            if compressed:
-                self.img_topics = [left_topic + "/compressed"]
-                self.message_types = [CompressedImage]
-            else:
-                self.img_topics = [left_topic + "/compressed"]
-                self.message_types = [Image]
-
-        self.synchronizer = None
-        self.filters = None
-        if self.stereo:
-            self.filters = [message_filters.SimpleFilter() for _ in self.img_topics]
-            self.synchronizer = message_filters.TimeSynchronizer(
-                self.filters, cache_size, slop
-            )
-            self.synchronizer.registerCallback(self.write_stereo_images)
+            self.img_topics = [left_topic + suffix]
 
         self.cv_bridge = CvBridge()
 
-    def __del__(self):
-        self.bag.close()
-
-    def save_image(self, img_msg, base_dir: str):
-        stamp = str(img_msg.header.stamp.to_nsec())
-        filename = os.path.join(base_dir, stamp + ".png")
-        if img_msg._type == "sensor_msgs/CompressedImage":
+    def save_image(self, img_msg, base_dir: str, stamp_nsec: int):
+        filename = os.path.join(base_dir, str(stamp_nsec) + ".png")
+        if is_compressed_image(img_msg):
             cv_image = self.cv_bridge.compressed_imgmsg_to_cv2(img_msg)
         else:
             cv_image = self.cv_bridge.imgmsg_to_cv2(img_msg)
 
         h, w, c = cv_image.shape
         if self.scale != 1.0:
-            cv_image = cv2.resize(cv_image, (int(w * scale), int(h * scale)))
+            cv_image = cv2.resize(cv_image, (int(w * self.scale), int(h * self.scale)))
 
         grayscale = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
         hsv = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
@@ -95,98 +82,74 @@ class ImageExtractor:
             grayscale = clahe.apply(grayscale)
 
         cv2.imwrite(filename, grayscale)
-        cv2.imshow("image", grayscale)
-        cv2.waitKey(1)
+        if self.display:
+            cv2.imshow("image", grayscale)
+            cv2.waitKey(1)
 
     def extract_images(self, delay: float = 0.0):
-        previous_stamp = self.bag.get_start_time()
+        reader = BagReader(self.bag, topics=self.img_topics)
+        # Rate limit per topic, so that the left and right images of a stereo pair both pass
+        start = reader.start_time_nsec() * 1e-9
+        previous_stamps = {topic: start for topic in self.img_topics}
 
         print("topics: {}".format(self.img_topics))
-        for topic, msg, t in tqdm(
-            self.bag.read_messages(), total=self.bag.get_message_count()
-        ):
-            if topic in self.img_topics:
-                if t.to_sec() < start_time:
-                    continue
-                if t.to_sec() > end_time:
-                    break
-                if t.to_sec() - previous_stamp < delay:
-                    continue
-                if self.stereo:
-                    self.filters[self.img_topics.index(topic)].signalMessage(msg)
-                else:
-                    self.save_image(msg, self.img_dir)
-                previous_stamp = t.to_sec()
+        for topic, msg, t in tqdm(reader, total=reader.message_count()):
+            if not self.node.ok():
+                break
+            t_sec = t * 1e-9
+            if t_sec < self.start_time:
+                continue
+            if self.end_time > 0 and t_sec > self.end_time:
+                break
+            if t_sec - previous_stamps[topic] < delay:
+                continue
+            if self.stereo:
+                self.synchronizer.add(self.img_topics.index(topic), msg)
+            else:
+                self.save_image(msg, self.img_dir, stamp_to_nsec(msg.header.stamp))
+            previous_stamps[topic] = t_sec
+        reader.close()
 
     def write_stereo_images(self, left_msg, right_msg):
         # Matches timestamps in left and right messages
-        new_stamp = rospy.Time(
-            nsecs=min(left_msg.header.stamp.to_nsec(), right_msg.header.stamp.to_nsec())
-        )
-
-        left_msg.header.stamp = new_stamp
-        right_msg.header.stamp = new_stamp
-        self.save_image(left_msg, self.left_image_dir)
-        self.save_image(right_msg, self.right_image_dir)
+        stamp = min(stamp_to_nsec(left_msg.header.stamp), stamp_to_nsec(right_msg.header.stamp))
+        self.save_image(left_msg, self.left_image_dir, stamp)
+        self.save_image(right_msg, self.right_image_dir, stamp)
 
 
 if __name__ == "__main__":
-    rospy.init_node("extract_images", anonymous=True)
+    node = Node("extract_images")
 
-    if not rospy.has_param("~image_dir"):
-        rospy.logfatal("Require the dataset path of asl directory")
+    image_folder = node.get_param("image_dir", "")
+    bag_file = node.get_param("bag", "")
+    if not image_folder:
+        node.logfatal("Require the dataset path of asl directory")
+        exit(1)
+    if not bag_file:
+        node.logfatal("Require the bag file to extract images")
+        exit(1)
 
-    if not rospy.has_param("~bag"):
-        rospy.logfatal("Require the bag file to extract images")
+    scale = node.get_param("scale", 1.0)
+    delay = node.get_param("write_every_nsecs", 0.0)  # seconds between written images
+    stereo = node.get_param("stereo", False)
+    start_time = node.get_param("start_time", 0.0)  # bag time [s], 0: from the start
+    end_time = node.get_param("end_time", 0.0)  # bag time [s], 0: until the end
+    cache_size = node.get_param("cache_size", 100)
+    left = node.get_param("left", "/left/image_raw")
+    right = node.get_param("right", "/right/image_raw")
+    compressed = node.get_param("compressed", False)
+    display = node.get_param("display", False)
 
-    scale = 1.0
-    if rospy.has_param("~scale"):
-        scale = rospy.get_param("~scale")
-
-    image_folder = rospy.get_param("~image_dir")
-    bag_file = rospy.get_param("~bag")
-
-    delay = 0.0
-    if rospy.has_param("~write_every_nsecs"):
-        delay = rospy.get_param("~write_every_nsecs")
-
-    stereo = False
-    if rospy.has_param("~stereo"):
-        stereo = rospy.get_param("~stereo")
-
-    start = 0.0
-    if rospy.has_param("~start"):
-        to_secs = rospy.get_param("~upto_n_secs")
-
-    slop = 0.02
-    if rospy.has_param("~slop"):
-        slop = rospy.get_param("~slop")
-
-    cache_size = 100
-    if rospy.has_param("~cache_size"):
-        cache_size = rospy.get_param("~cache_size")
-
-    left = "/left/image_raw"
-    if rospy.has_param("~left"):
-        left = rospy.get_param("~left")
-
-    right = "/right/image_raw"
-    if rospy.has_param("~right"):
-        right = rospy.get_param("~right")
-
-    compressed = False
-    if rospy.has_param("~compressed"):
-        compressed = rospy.get_param("~compressed")
-
-    rospy.loginfo("bag: {}".format(bag_file))
-    rospy.loginfo("image dir: {}".format(image_folder))
-    rospy.loginfo("Delay : {}".format(delay))
-    rospy.loginfo("stereo: {}".format(stereo))
-    rospy.loginfo("compressed: {}".format(compressed))
-    rospy.loginfo("left image topic: {}".format(left))
-    rospy.loginfo("right image topic: {}".format(right))
+    node.loginfo("bag: {}".format(bag_file))
+    node.loginfo("image dir: {}".format(image_folder))
+    node.loginfo("Delay : {}".format(delay))
+    node.loginfo("stereo: {}".format(stereo))
+    node.loginfo("compressed: {}".format(compressed))
+    node.loginfo("left image topic: {}".format(left))
+    node.loginfo("right image topic: {}".format(right))
 
     extractor = ImageExtractor(
+        node,
         image_dir=image_folder,
         bag_file=bag_file,
         stereo=stereo,
@@ -194,10 +157,13 @@ if __name__ == "__main__":
         compressed=compressed,
         cache_size=cache_size,
         scale=scale,
-        slop=slop,
         right_topic=right,
+        start_time=start_time,
+        end_time=end_time,
+        display=display,
     )
-    extractor.extract_images(delay=delay)
-
-    # while not rospy.is_shutdown():
-    #     rospy.spin()
+    try:
+        extractor.extract_images(delay=delay)
+    except KeyboardInterrupt:
+        print("Interrupted")
+    node.shutdown()

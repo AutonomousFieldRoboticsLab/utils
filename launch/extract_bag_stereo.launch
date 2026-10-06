@@ -1,26 +1,24 @@
+<!-- ROS 1 launch file for scripts/extract_bag_stereo.py. For ROS 2 use extract_bag_stereo.launch.py -->
 <launch>
+  <arg name="image_dir" default="/path/to/images"/>
+  <arg name="bag" default="/path/to/bag.bag"/>
+  <arg name="left_topic" default="/slave1/image_raw"/>
+  <arg name="right_topic" default="/slave2/image_raw"/>
+  <!-- Stereo calibration with "left" and "right" sections -->
+  <arg name="config_file" default="/path/to/stereo_config.yaml"/>
+  <arg name="scale" default="1.0"/>
+  <arg name="freq" default="2.0"/>
+  <arg name="undistort" default="false"/>
 
-    <!-- Arguments -->
-    <arg name="image_dir" value="/home/bjoshi/colmap/devils_short" />
-    <arg name="bag" value="/home/bjoshi/florida_2021-08-20-18-57-01_800x600.bag" />
-    <arg name="left_topic" value="/slave1/image_raw" />
-    <arg name="right_topic" value="/slave2/image_raw" />
-    <arg name="config_file" value="/home/bjoshi/ros_workspaces/utils_ws/src/utils_ros/config/aqua/speedo1_downsize.yaml" />
-    <arg name="scale" value="1.0" />
-    <arg name="freq" value="2" />
+  <node name="gopro" pkg="utils_ros" type="extract_bag_stereo.py" output="screen" required="true">
+    <param name="image_dir" value="$(arg image_dir)"/>
+    <param name="input_bag" value="$(arg bag)"/>
+    <param name="left_topic" value="$(arg left_topic)"/>
+    <param name="right_topic" value="$(arg right_topic)"/>
+    <param name="config_file" value="$(arg config_file)"/>
 
-
-    <node name="gopro" pkg="utils_ros" type="extract_bag_stereo.py" output="screen" required="true">
-
-        <param name="image_dir" value="$(arg image_dir)" />
-        <param name="input_bag" value="$(arg bag)" />
-        <param name="left_topic" value="$(arg left_topic)" />
-        <param name="right_topic" value="$(arg right_topic)" />
-        <param name="config_file" value="$(arg config_file)" />
-
-        <param name="scale" value="$(arg scale)" />
-        <param name="freq" value="$(arg freq)" />
-
-    </node>
-
+    <param name="scale" value="$(arg scale)"/>
+    <param name="freq" value="$(arg freq)"/>
+    <param name="undistort" value="$(arg undistort)"/>
+  </node>
 </launch>
