@@ -21,7 +21,7 @@ builds the matching executables.
 | `write_kf_images` | ROS 1 and ROS 2 | Writes the keyframe images of a VIO trajectory from a bag, undistorted and optionally scaled |
 | `scripts/extract_images.py` | ROS 1 and ROS 2 | Writes images from a bag at a fixed rate (mono or stereo) |
 | `scripts/extract_bag_stereo.py` | ROS 1 and ROS 2 | Writes synchronized stereo images from a bag, optionally undistorted |
-| `scripts/gopro_combine_bags.py` | ROS 1 and ROS 2 | Combines a left and a right GoPro bag into one stereo bag |
+| `scripts/gopro_combine_bags.py` | ROS 1 and ROS 2 | Combines a left and a right GoPro bag (and optionally a center one) into one bag |
 | `scripts/brisk_feature_detection.py` | none | Detects and draws BRISK features in an image or a folder of images |
 
 # Installation
@@ -169,15 +169,15 @@ On ROS 1, use `roslaunch utils_ros extract_images.launch` and `roslaunch utils_r
 extract_bag_stereo.launch`. For stereo, `extract_images` pairs left and right images with identical
 timestamps; `start_time`/`end_time` limit the extracted bag time range.
 
-`gopro_combine_bags.py` takes command-line arguments. On ROS 2, `--storage_id` selects the storage
+`gopro_combine_bags.py` takes command-line arguments; `-c` adds an optional center bag. On ROS 2, `--storage_id` selects the storage
 of the output bag (`.mcap`, the default, or `.db3`):
 
 ```bash
-ros2 run utils_ros gopro_combine_bags.py -l /path/to/left -r /path/to/right -o /path/to/stereo -s .mcap
+ros2 run utils_ros gopro_combine_bags.py -l /path/to/left -r /path/to/right [-c /path/to/center] -o /path/to/stereo -s .mcap
 ```
 
 ```bash
-rosrun utils_ros gopro_combine_bags.py -l left.bag -r right.bag -o stereo.bag
+rosrun utils_ros gopro_combine_bags.py -l left.bag -r right.bag [-c center.bag] -o stereo.bag
 ```
 
 # Notes
