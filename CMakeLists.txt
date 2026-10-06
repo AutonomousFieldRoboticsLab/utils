@@ -1,91 +1,55 @@
-cmake_minimum_required(VERSION 3.8)
-project(utils_ros2)
+cmake_minimum_required(VERSION 3.10)
+project(utils_ros)
 
-# Use C++17
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ==============================================================================
-# Dependencies
-# ==============================================================================
-find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(cv_bridge REQUIRED)
-find_package(image_transport REQUIRED)
-find_package(message_filters REQUIRED)
+# By default we build the ROS executables, but this can be disabled to build only the library
+option(ENABLE_ROS "Build the ROS executables (ROS 1 or ROS 2, whichever is found)" ON)
+
+# ===========================
+# Dependencies shared by all builds
+# ===========================
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV REQUIRED)
-find_package(tf2 REQUIRED)
-find_package(tf2_ros REQUIRED)
-find_package(rosbag2_cpp REQUIRED)
 
-# ==============================================================================
-# Include directories
-# ==============================================================================
-include_directories(
-  include
-  ${EIGEN3_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
+# ===========================
+# ROS-agnostic core library
+# ===========================
+set(CORE_LIBRARY_SOURCES
+  src/core/camera_intrinsics.cpp
+  src/core/keyframe_writer.cpp
+  src/core/trajectory.cpp
+  src/utils/stamp_utils.cpp
 )
 
-# ==============================================================================
-# Library
-# ==============================================================================
-add_library(${PROJECT_NAME}
-  src/Utils.cpp
-  src/Trajectory.cpp
-)
+# Called from ROS1.cmake / ROS2.cmake once the ROS package has been declared.
+# The library is internal to the executables, so it is always static.
+macro(utils_add_core_library)
+  add_library(${PROJECT_NAME}_lib STATIC ${CORE_LIBRARY_SOURCES})
+  target_include_directories(${PROJECT_NAME}_lib
+    PUBLIC
+      src
+      ${OpenCV_INCLUDE_DIRS}
+      ${EIGEN3_INCLUDE_DIRS}
+  )
+  target_link_libraries(${PROJECT_NAME}_lib ${OpenCV_LIBS})
+endmacro()
 
-ament_target_dependencies(${PROJECT_NAME}
-  rclcpp
-  sensor_msgs
-  cv_bridge
-  image_transport
-  message_filters
-  OpenCV
-  tf2_ros
-  tf2
-  rosbag2_cpp
-)
-
-target_compile_options(${PROJECT_NAME} PRIVATE -march=native)
-
-# ==============================================================================
-# Executable
-# ==============================================================================
-add_executable(write_kf_images src/write_keyframe_image.cpp)
-target_link_libraries(write_kf_images ${PROJECT_NAME})
-
-
-ament_target_dependencies(write_kf_images
-  rclcpp
-  sensor_msgs
-  cv_bridge
-  image_transport
-  message_filters
-  OpenCV
-)
-
-# ==============================================================================
-# Installation
-# ==============================================================================
-install(TARGETS
-  ${PROJECT_NAME}
-  write_kf_images
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(DIRECTORY include/
-  DESTINATION include/
-)
-
-install(DIRECTORY launch/
-  DESTINATION share/${PROJECT_NAME}/launch
-)
-
-# ==============================================================================
-# ament package
-# ==============================================================================
-ament_package()
+# ===========================
+# Find our ROS version
+# ===========================
+# NOTE: Default to ROS 1 if both are in the environment
+find_package(catkin QUIET COMPONENTS roscpp)
+find_package(ament_cmake QUIET)
+if(catkin_FOUND AND ENABLE_ROS)
+  message(STATUS "ROS *1* found, building ROS1.cmake")
+  include(${PROJECT_SOURCE_DIR}/cmake/ROS1.cmake)
+elseif(ament_cmake_FOUND AND ENABLE_ROS)
+  message(STATUS "ROS *2* found, building ROS2.cmake")
+  include(${PROJECT_SOURCE_DIR}/cmake/ROS2.cmake)
+else()
+  message(WARNING "No ROS found (or ENABLE_ROS=OFF): building only the core library")
+  utils_add_core_library()
+endif()

@@ -1,0 +1,28 @@
+<!-- ROS 1 launch file. For ROS 2 use write_keyframe_images.launch.py -->
+<launch>
+  <arg name="bag_file" default="/path/to/bag.bag"/>
+  <arg name="image_dir" default="/path/to/images"/>
+  <arg name="traj_file" default="/path/to/trajectory.txt"/>
+  <arg name="left_image_topic" default="/gopro/image_raw"/>
+  <arg name="right_image_topic" default=""/>
+  <arg name="config_file" default="$(find utils_ros)/config/gopro/gopro1.yaml"/>
+
+  <arg name="scale" default="1.0"/>
+  <arg name="compressed" default="true"/>
+  <arg name="skip_first_line" default="true"/>
+  <arg name="stereo" default="false"/>
+
+  <node pkg="utils_ros" type="write_kf_images" name="extract_keyframes" output="screen" required="true">
+    <param name="bag_file" value="$(arg bag_file)"/>
+    <param name="image_dir" value="$(arg image_dir)"/>
+    <param name="traj_file" value="$(arg traj_file)"/>
+    <param name="left_image_topic" value="$(arg left_image_topic)"/>
+    <param name="right_image_topic" value="$(arg right_image_topic)"/>
+    <param name="config_file" value="$(arg config_file)"/>
+
+    <param name="scale" value="$(arg scale)"/>
+    <param name="compressed" value="$(arg compressed)"/>
+    <param name="skip_first_line" value="$(arg skip_first_line)"/>
+    <param name="stereo" value="$(arg stereo)"/>
+  </node>
+</launch>

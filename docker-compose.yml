@@ -1,0 +1,46 @@
+# utils_ros: one service per supported ROS distro.
+#
+# Build an image:
+#   docker compose build utils_ros_jazzy   # or utils_ros_noetic, utils_ros_humble (none: build all)
+#
+# Write keyframe images (DATA_DIR is mounted at /utils_ws/data, defaults to ./data):
+#   DATA_DIR=/path/to/data docker compose run --rm utils_ros_jazzy \
+#     ros2 launch utils_ros write_keyframe_images.launch.py \
+#       bag_file:=/utils_ws/data/run traj_file:=/utils_ws/data/traj.txt \
+#       image_dir:=/utils_ws/data/keyframes
+#
+# Interactive shell:
+#   docker compose run --rm utils_ros_jazzy
+
+name: utils_ros
+
+x-utils-common: &utils-common
+  network_mode: host
+  stdin_open: true
+  tty: true
+  volumes:
+    # Input bags / trajectories and output images
+    - ${DATA_DIR:-./data}:/utils_ws/data
+  working_dir: /utils_ws
+
+services:
+  utils_ros_noetic:
+    <<: *utils-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile_ros1_20_04
+    image: utils_ros:noetic
+
+  utils_ros_humble:
+    <<: *utils-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile_ros2_22_04
+    image: utils_ros:humble
+
+  utils_ros_jazzy:
+    <<: *utils-common
+    build:
+      context: .
+      dockerfile: docker/Dockerfile_ros2_24_04
+    image: utils_ros:jazzy
