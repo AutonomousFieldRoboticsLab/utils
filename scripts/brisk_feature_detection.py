@@ -1,8 +1,9 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-import cv2
 import argparse
 import os
+
+import cv2
 from tqdm import tqdm
 
 if __name__ == "__main__":
@@ -11,12 +12,8 @@ if __name__ == "__main__":
         description="Detect and draw brisk features",
         add_help=True,
     )
-    parser.add_argument(
-        "--image", "-i", type=str, help="path to image for feature detection"
-    )
-    parser.add_argument(
-        "--folder", "-f", type=str, help="path to folder containing images"
-    )
+    parser.add_argument("--image", "-i", type=str, help="path to image for feature detection")
+    parser.add_argument("--folder", "-f", type=str, help="path to folder containing images")
     parser.add_argument("--display", "-d", action="store_true", help="display images")
 
     args = parser.parse_args()

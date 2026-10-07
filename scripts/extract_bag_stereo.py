@@ -1,23 +1,32 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+"""Writes synchronized stereo images from a bag at a fixed rate, optionally undistorted.
+
+Works with ROS 1 bags and ROS 2 bags (MCAP or SQLite3); the ROS version is taken from $ROS_VERSION.
+"""
 
 import os
+import sys
+
 import cv2
-import rospy
-from cv_bridge import CvBridge
 import numpy as np
-import rosbag
-from message_filters import TimeSynchronizer, SimpleFilter
+from cv_bridge import CvBridge
 from tqdm import tqdm
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from ros_compat import (  # noqa: E402
+    BagReader,
+    ExactTimeSynchronizer,
+    Node,
+    is_compressed_image,
+    message_type,
+    stamp_to_nsec,
+)
 
 cv_bridge = CvBridge()
 
 
 def read_camera_intrinsics(cv_node: cv2.FileNode):  # type: ignore
     # Read camera intrinsics from cv_node
-
-    camera_matrix = np.ones((3, 3))
-    distortion_coefficients = np.ones((1, 4))
-
     camera_matrix = cv_node.getNode("K").mat()
     distortion_coefficients = cv_node.getNode("D").mat()
 
@@ -27,9 +36,18 @@ def read_camera_intrinsics(cv_node: cv2.FileNode):  # type: ignore
     return camera_matrix, distortion_coefficients
 
 
+def to_cv_image(img_msg, side: str):
+    if is_compressed_image(img_msg):
+        return cv_bridge.compressed_imgmsg_to_cv2(img_msg, desired_encoding="bgr8")
+    if message_type(img_msg) == "Image":
+        return cv_bridge.imgmsg_to_cv2(img_msg, desired_encoding="bgr8")
+    raise ValueError("Unknown {} image type".format(side))
+
+
 class ColmapStereo:
     def __init__(
         self,
+        node: Node,
         input_bag: str,
         root_folder: str,
         left_topic: str,
@@ -39,32 +57,25 @@ class ColmapStereo:
         config_file=None,
         undistort=False,
     ):
+        self.node = node
+        self.input_bag = input_bag
         self.scale = scale
         self.undistort = undistort
 
-        if not os.path.exists(root_folder):
-            os.makedirs(root_folder)
         image_folder = os.path.join(root_folder, "images")
-        if not os.path.exists(image_folder):
-            os.mkdir(image_folder)
-
         self.left_img_folder = os.path.join(image_folder, "left")
-        if not os.path.exists(self.left_img_folder):
-            os.mkdir(self.left_img_folder)
-
         self.right_img_folder = os.path.join(image_folder, "right")
-        if not os.path.exists(self.right_img_folder):
-            os.mkdir(self.right_img_folder)
+        os.makedirs(self.left_img_folder, exist_ok=True)
+        os.makedirs(self.right_img_folder, exist_ok=True)
 
         self.last_timestamp = -1
         self.delay = delay
         self.indx = 0
+        self.logged_first_callback = False
 
         opencv_config = cv2.FileStorage(config_file, cv2.FILE_STORAGE_READ)  # type: ignore
-        left_node = opencv_config.getNode("left")
-        right_node = opencv_config.getNode("right")
-        left_K, left_dist = read_camera_intrinsics(left_node)
-        right_K, right_dist = read_camera_intrinsics(right_node)
+        left_K, left_dist = read_camera_intrinsics(opencv_config.getNode("left"))
+        right_K, right_dist = read_camera_intrinsics(opencv_config.getNode("right"))
 
         height = int(opencv_config.getNode("image_height").real())
         width = int(opencv_config.getNode("image_width").real())
@@ -73,97 +84,67 @@ class ColmapStereo:
         self.size = (width, height)
 
         self.left_map_x, self.left_map_y = cv2.initUndistortRectifyMap(  # type: ignore
-            left_K, left_dist, np.eye(3), left_K, self.size, cv2.CV_32FC1  # type: ignore
+            left_K,
+            left_dist,
+            np.eye(3),
+            left_K,
+            self.size,
+            cv2.CV_32FC1,  # type: ignore
         )
         self.right_map_x, self.right_map_y = cv2.initUndistortRectifyMap(  # type: ignore
-            right_K, right_dist, np.eye(3), right_K, self.size, cv2.CV_32FC1  # type: ignore
+            right_K,
+            right_dist,
+            np.eye(3),
+            right_K,
+            self.size,
+            cv2.CV_32FC1,  # type: ignore
         )
 
         self.topics = [left_topic, right_topic]
         print(self.topics)
-        filters = [SimpleFilter() for _ in self.topics]
-        stereo_filter = TimeSynchronizer(filters, 100)
 
-        stereo_filter.registerCallback(self.stereo_callback)
+    def run(self):
+        stereo_filter = ExactTimeSynchronizer(len(self.topics), 100, self.stereo_callback)
 
-        with rosbag.Bag(input_bag, "r") as ibag:
-            for topic, msg, t in tqdm(ibag.read_messages(), total=ibag.get_message_count()):  # type: ignore
-                if topic in self.topics:
-                    filters[self.topics.index(topic)].signalMessage(msg)
+        reader = BagReader(self.input_bag, topics=self.topics)
+        for topic, msg, t in tqdm(reader, total=reader.message_count()):  # type: ignore
+            if not self.node.ok():
+                break
+            stereo_filter.add(self.topics.index(topic), msg)
+        reader.close()
+
+    def write_image(self, image, map_x, map_y, folder: str, timestamp: int):
+        if self.undistort:
+            image = cv2.remap(image, map_x, map_y, interpolation=cv2.INTER_LINEAR)  # type: ignore
+
+        if self.scale != 1.0:
+            image = cv2.resize(  # type: ignore
+                image, (int(self.size[0] * self.scale), int(self.size[1] * self.scale))
+            )
+
+        cv2.imwrite(os.path.join(folder, "{}.png".format(str(timestamp))), image)  # type: ignore
 
     def stereo_callback(self, left_img_msg, right_img_msg):
-        rospy.loginfo_once("Stereo callback called")
-        left_timestamp = left_img_msg.header.stamp.to_nsec()
-        right_timestamp = right_img_msg.header.stamp.to_nsec()
+        if not self.logged_first_callback:
+            self.node.loginfo("Stereo callback called")
+            self.logged_first_callback = True
+        left_timestamp = stamp_to_nsec(left_img_msg.header.stamp)
+        right_timestamp = stamp_to_nsec(right_img_msg.header.stamp)
 
         assert left_timestamp == right_timestamp
         if ((left_timestamp - self.last_timestamp) * 1e-9) >= self.delay:
-            if left_img_msg._type == "sensor_msgs/CompressedImage":
-                left_image = cv_bridge.compressed_imgmsg_to_cv2(
-                    left_img_msg, desired_encoding="bgr8"
-                )
-            elif left_img_msg._type == "sensor_msgs/Image":
-                left_image = cv_bridge.imgmsg_to_cv2(
-                    left_img_msg, desired_encoding="bgr8"
-                )
-            else:
-                raise ValueError("Unknown left image type")
-
-            if self.undistort:
-                left_image_undistorted = cv2.remap(  # type: ignore
-                    left_image,
-                    self.left_map_x,
-                    self.left_map_y,
-                    interpolation=cv2.INTER_LINEAR,  # type: ignore
-                )
-            else:
-                left_image_undistorted = left_image
-
-            if self.scale != 1.0:
-                left_image_undistorted = cv2.resize(  # type: ignore
-                    left_image_undistorted,
-                    (int(self.size[0] * self.scale), int(self.size[1] * self.scale)),
-                )
-
-            cv2.imwrite(  # type: ignore
-                os.path.join(
-                    self.left_img_folder, "{}.png".format(str(left_timestamp))
-                ),
-                left_image_undistorted,
+            left_image = to_cv_image(left_img_msg, "left")
+            self.write_image(
+                left_image, self.left_map_x, self.left_map_y, self.left_img_folder, left_timestamp
             )
 
-            if right_img_msg._type == "sensor_msgs/CompressedImage":
-                right_image = cv_bridge.compressed_imgmsg_to_cv2(
-                    right_img_msg, desired_encoding="bgr8"
-                )
-            elif right_img_msg._type == "sensor_msgs/Image":
-                right_image = cv_bridge.imgmsg_to_cv2(
-                    right_img_msg, desired_encoding="bgr8"
-                )
-            else:
-                raise ValueError("Unknown right image type")
-
-            if self.undistort:
-                right_image_undistorted = cv2.remap(  # type: ignore
-                    right_image,
-                    self.right_map_x,
-                    self.right_map_y,
-                    interpolation=cv2.INTER_LINEAR,  # type: ignore
-                )
-            else:
-                right_image_undistorted = right_image
-
-            if self.scale != 1.0:
-                right_image_undistorted = cv2.resize(  # type: ignore
-                    right_image_undistorted,
-                    (int(self.size[0] * self.scale), int(self.size[1] * self.scale)),
-                )
-
-            cv2.imwrite(  # type: ignore
-                os.path.join(
-                    self.right_img_folder, "{}.png".format(str(right_timestamp))
-                ),
-                right_image_undistorted,
+            right_image = to_cv_image(right_img_msg, "right")
+            self.write_image(
+                right_image,
+                self.right_map_x,
+                self.right_map_y,
+                self.right_img_folder,
+                right_timestamp,
             )
 
             self.last_timestamp = left_timestamp
@@ -171,51 +152,41 @@ class ColmapStereo:
 
 
 if __name__ == "__main__":
-    rospy.init_node("bag_extract_stereo", anonymous=True)
+    node = Node("bag_extract_stereo")
 
-    if not rospy.has_param("~input_bag"):
-        rospy.logfatal("Require the input bag file")
-        exit(1)
+    required = {
+        "input_bag": "Require the input bag file",
+        "image_dir": "Require the dataset path of asl directory",
+        "config_file": "Require the config file path",
+        "left_topic": "Require the left image topic",
+        "right_topic": "Require the right image topic",
+    }
+    params = {name: node.get_param(name, "") for name in required}
+    for name, message in required.items():
+        if not params[name]:
+            node.logfatal(message)
+            exit(1)
 
-    if not rospy.has_param("~image_dir"):
-        rospy.logfatal("Require the dataset path of asl directory")
-        exit(1)
-
-    if not rospy.has_param("~config_file"):
-        rospy.logfatal("Require the config file path")
-        exit(1)
-
-    if not rospy.has_param("~left_topic"):
-        rospy.logfatal("Require the left image topic")
-        exit(1)
-
-    if not rospy.has_param("~right_topic"):
-        rospy.logfatal("Require the right image topic")
-        exit(1)
-
-    config_file = rospy.get_param("~config_file")
-    image_folder = rospy.get_param("~image_dir")
-    left_topic = rospy.get_param("~left_topic")
-    right_topic = rospy.get_param("~right_topic")
-    input_bag = rospy.get_param("~input_bag")
-
-    if rospy.has_param("~scale"):
-        scale = rospy.get_param("~scale")
-
-    freq = 2.0
-    if rospy.has_param("~freq"):
-        freq = rospy.get_param("~freq")
-
-    undistort = False
-    if rospy.has_param("~undistort"):
-        undistort = rospy.get_param("~undistort")
+    scale = node.get_param("scale", 1.0)
+    freq = node.get_param("freq", 2.0)
+    undistort = node.get_param("undistort", False)
 
     delay = 1.0 / freq  # type: ignore
-    rospy.loginfo("Delay : {}".format(delay))
+    node.loginfo("Delay : {}".format(delay))
 
     colmap_stereo = ColmapStereo(
-        input_bag, image_folder, left_topic, right_topic, delay, scale=scale, config_file=config_file, undistort=undistort  # type: ignore
+        node,
+        params["input_bag"],
+        params["image_dir"],
+        params["left_topic"],
+        params["right_topic"],
+        delay,
+        scale=scale,
+        config_file=params["config_file"],
+        undistort=undistort,  # type: ignore
     )
-
-    while not rospy.is_shutdown():
-        rospy.spin()
+    try:
+        colmap_stereo.run()
+    except KeyboardInterrupt:
+        print("Interrupted")
+    node.shutdown()

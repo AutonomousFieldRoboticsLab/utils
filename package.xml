@@ -1,25 +1,49 @@
 <?xml version="1.0"?>
-<package format="2">
+<package format="3">
+
+  <!-- Package information -->
   <name>utils_ros</name>
   <version>0.0.1</version>
-  <description> This package constains the utils used in several SLAM projects  </description>
+  <description>Utility nodes and scripts used in several SLAM projects (ROS 1 / ROS 2).</description>
+
   <maintainer email="bjoshi@email.sc.edu">Bharat Joshi</maintainer>
+  <author email="bjoshi@email.sc.edu">Bharat Joshi</author>
   <license>BSD</license>
 
-  <author email="bjoshi@email.sc.edu">Bharat Joshi</author>
+  <!-- ROS 1: dependencies needed to compile this package -->
+  <buildtool_depend condition="$ROS_VERSION == 1">catkin</buildtool_depend>
+  <depend condition="$ROS_VERSION == 1">roscpp</depend>
+  <depend condition="$ROS_VERSION == 1">rosbag</depend>
+  <depend condition="$ROS_VERSION == 1">sensor_msgs</depend>
+  <depend condition="$ROS_VERSION == 1">cv_bridge</depend>
+  <exec_depend condition="$ROS_VERSION == 1">roslaunch</exec_depend>
+  <exec_depend condition="$ROS_VERSION == 1">rospy</exec_depend>
 
-  <buildtool_depend>catkin</buildtool_depend>
+  <!-- ROS 2: dependencies needed to compile this package -->
+  <buildtool_depend condition="$ROS_VERSION == 2">ament_cmake</buildtool_depend>
+  <depend condition="$ROS_VERSION == 2">rclcpp</depend>
+  <depend condition="$ROS_VERSION == 2">sensor_msgs</depend>
+  <depend condition="$ROS_VERSION == 2">cv_bridge</depend>
+  <depend condition="$ROS_VERSION == 2">rosbag2_cpp</depend>
+  <depend condition="$ROS_VERSION == 2">rosbag2_storage_default_plugins</depend>
+  <!-- On Humble the MCAP storage plugin is not part of the default plugins -->
+  <exec_depend condition="$ROS_DISTRO == humble">rosbag2_storage_mcap</exec_depend>
+  <exec_depend condition="$ROS_VERSION == 2">ros2launch</exec_depend>
+  <exec_depend condition="$ROS_VERSION == 2">launch_ros</exec_depend>
+  <exec_depend condition="$ROS_VERSION == 2">rclpy</exec_depend>
+  <exec_depend condition="$ROS_VERSION == 2">rosbag2_py</exec_depend>
+  <exec_depend condition="$ROS_VERSION == 2">rosidl_runtime_py</exec_depend>
 
-  <depend>sensor_msgs</depend>
-  <depend>cv_bridge</depend>
-  <depend>roscpp</depend>
-  <depend>rosbag</depend>
-  <depend>message_filters</depend>
-  <depend>image_transport</depend>
-  <depend>message_generation</depend>
-  <depend>message_runtime</depend>
-  <depend>camera_info_manager</depend>
+  <!-- System dependencies for both versions -->
+  <depend>eigen</depend>
+  <depend>libopencv-dev</depend>
+  <!-- Python tools in scripts/ -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-tqdm</exec_depend>
 
-  <exec_depend>rospy</exec_depend>
-
+  <export>
+    <build_type condition="$ROS_VERSION == 1">catkin</build_type>
+    <build_type condition="$ROS_VERSION == 2">ament_cmake</build_type>
+  </export>
 </package>
