@@ -29,18 +29,18 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile_ros1_20_04
-    image: utils_ros:noetic
+    image: afrl/utils_ros:noetic
 
   utils_ros_humble:
     <<: *utils-common
     build:
       context: .
       dockerfile: docker/Dockerfile_ros2_22_04
-    image: utils_ros:humble
+    image: afrl/utils_ros:humble
 
   utils_ros_jazzy:
     <<: *utils-common
     build:
       context: .
       dockerfile: docker/Dockerfile_ros2_24_04
-    image: utils_ros:jazzy
+    image: afrl/utils_ros:jazzy

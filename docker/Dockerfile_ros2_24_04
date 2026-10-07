@@ -1,10 +1,10 @@
 # utils_ros for ROS 2 Jazzy (Ubuntu 24.04).
 #
 # Build (from the repository root):
-#   docker build -f docker/Dockerfile_ros2_24_04 -t utils_ros:jazzy .
+#   docker build -f docker/Dockerfile_ros2_24_04 -t afrl/utils_ros:jazzy .
 #
 # Run (mount the folder that holds your bags and trajectories at /utils_ws/data):
-#   docker run --rm -it -v /path/to/data:/utils_ws/data utils_ros:jazzy \
+#   docker run --rm -it -v /path/to/data:/utils_ws/data afrl/utils_ros:jazzy \
 #     ros2 launch utils_ros write_keyframe_images.launch.py \
 #       bag_file:=/utils_ws/data/run traj_file:=/utils_ws/data/traj.txt \
 #       image_dir:=/utils_ws/data/keyframes
